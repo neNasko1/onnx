@@ -18,6 +18,7 @@
 #include "onnx/defs/data_type_utils.h"
 #include "onnx/shape_inference/attribute_binder.h"
 #include "onnx/string_utils.h"
+#include "onnx/defs/printer.h"
 
 namespace ONNX_NAMESPACE {
 namespace shape_inference {
@@ -1059,6 +1060,7 @@ std::vector<const TypeProto*> GraphInferencerImpl::doInferencing(
 
   for (int i = 0, end = num_inputs; i < end; ++i) {
     const TypeProto* inferred_input = input_types[i];
+    std::cout << "We are getting " << (*inferred_input) << std::endl;
 
     if (!inferred_input)
       continue;
@@ -1066,6 +1068,7 @@ std::vector<const TypeProto*> GraphInferencerImpl::doInferencing(
     TypeProto* graph_input = g_->mutable_input(i)->mutable_type();
     // Even if graphInput doesn't have defined type, it will assign inferredType to it
     mergeShapesAndTypes(*inferred_input, graph_input);
+    std::cout << "real " << *graph_input << std::endl;
 
     if (symbol_table) {
       MaterializeSymbolicShape(graph_input, *symbol_table);
@@ -1075,6 +1078,7 @@ std::vector<const TypeProto*> GraphInferencerImpl::doInferencing(
   // future: pass inputData into InferShapes either directly, or indirectly by
   // updating initializers that match subgraph inputs.
   (void)input_data;
+  std::cout << "we are here" << std::endl;
   InferShapesImpl(
       g_,
       *context_->outer_scope_value_types_by_name, // never null
@@ -1084,6 +1088,7 @@ std::vector<const TypeProto*> GraphInferencerImpl::doInferencing(
       context_->model_local_functions,
       context_->schema_registry,
       context_->generated_shape_data_by_name);
+  std::cout << "end" << std::endl;
 
   std::vector<const TypeProto*> graph_output_types;
   graph_output_types.reserve(g_->output().size());

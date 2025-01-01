@@ -521,6 +521,7 @@ ONNX_OPERATOR_SET_SCHEMA(
         .Output(0, "concat_result", "Concatenated tensor", "T", OpSchema::Single, true, 1, OpSchema::Differentiable)
         .TypeConstraint("T", OpSchema::all_tensor_types_ir4(), "Constrain output types to any tensor type.")
         .TypeAndShapeInferenceFunction([](InferenceContext& ctx) {
+          std::cout << "WE ARE INFERRING" << std::endl;
           propagateElemTypeFromInputToOutput(ctx, 0, 0);
           auto numInputs = ctx.getNumInputs();
           if (numInputs < 1 || !hasNInputShapes(ctx, numInputs)) {
@@ -565,6 +566,7 @@ ONNX_OPERATOR_SET_SCHEMA(
               if (j == axis) {
                 if (shape.dim(j).has_dim_value()) {
                   total_length += static_cast<int>(shape.dim(j).dim_value());
+                  std::cout << "we are adding " << total_length << std::endl;
                 } else {
                   all_lengths_known = false;
                 }

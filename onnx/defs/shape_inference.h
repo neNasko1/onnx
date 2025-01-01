@@ -883,9 +883,9 @@ inline void unifyDim(Dim& dim, int64_t value) {
 //    input1 shape: (2, 3, 4, 'x')
 //    input2 shape: (2, 3, 4)
 //    output shape: None
-void UnionShapeInfo(const TensorShapeProto& source_shape, TypeProto_Tensor& target_type);
+bool UnionShapeInfo(const TensorShapeProto& source_shape, TypeProto_Tensor& target_type);
 
-void UnionShapeInfo(const TensorShapeProto& source_shape, TypeProto_SparseTensor& target_type);
+bool UnionShapeInfo(const TensorShapeProto& source_shape, TypeProto_SparseTensor& target_type);
 
 // target-type = Union (target-type, source-type)
 // target and source are required to have the same type.
@@ -897,7 +897,7 @@ void UnionShapeInfo(const TensorShapeProto& source_shape, TypeProto_SparseTensor
 //    source: sequence of tensor, elem_type: float, shape: (2, 3, 4)
 //    target: sequence of tensor, elem_type: float, shape: None
 //    output: sequence of tensor, elem_type: float, shape: None
-void UnionTypeInfo(const TypeProto& source_type, TypeProto& target_type);
+bool UnionTypeInfo(const TypeProto& source_type, TypeProto& target_type);
 
 // adjustNegativeAxes: Negative axes values are translated to the right axis in the positive range
 template <typename Axes>

@@ -184,7 +184,8 @@ void mergeInShapeInfo(const TypeProto_SparseTensor& source, TypeProto_SparseTens
 /// </summary>
 /// <param name="source_shape"></param>
 /// <param name="target_shape">destination shape</param>
-static void UnionShapeInfo(const TensorShapeProto& source_shape, TensorShapeProto& target_shape) {
+static bool UnionShapeInfo(const TensorShapeProto& source_shape, TensorShapeProto& target_shape) {
+  bool target_changed = false;
   auto source_rank = source_shape.dim_size();
   for (int i = 0; i < source_rank; ++i) {
     const auto& source_dim = source_shape.dim(i);
@@ -210,12 +211,14 @@ static void UnionShapeInfo(const TensorShapeProto& source_shape, TensorShapeProt
       auto dim = target_shape.mutable_dim(i);
       dim->clear_dim_value();
       dim->clear_dim_param();
+      target_changed = true;
     }
   }
+  return target_changed;
 }
 
 template <typename TENSOR_TYPE>
-static void UnionShapeInfoForTensor(const TensorShapeProto& source_shape, TENSOR_TYPE& target_type) {
+static bool UnionShapeInfoForTensor(const TensorShapeProto& source_shape, TENSOR_TYPE& target_type) {
   if (target_type.has_shape()) {
     TensorShapeProto* target_shape = target_type.mutable_shape();
 
@@ -223,44 +226,47 @@ static void UnionShapeInfoForTensor(const TensorShapeProto& source_shape, TENSOR
     auto target_rank = target_shape->dim_size();
     if (source_rank != target_rank) {
       target_type.clear_shape();
-      return;
+      return true;
     }
 
-    UnionShapeInfo(source_shape, *target_shape);
+    return UnionShapeInfo(source_shape, *target_shape);
   }
+  return false;
 }
 
-void UnionShapeInfo(const TensorShapeProto& source_shape, TypeProto_Tensor& target_type) {
-  UnionShapeInfoForTensor(source_shape, target_type);
+bool UnionShapeInfo(const TensorShapeProto& source_shape, TypeProto_Tensor& target_type) {
+  return UnionShapeInfoForTensor(source_shape, target_type);
 }
 
-static void UnionShapeInfo(const TypeProto_Tensor& source_type, TypeProto_Tensor& target_type) {
+static bool UnionShapeInfo(const TypeProto_Tensor& source_type, TypeProto_Tensor& target_type) {
   // The union of a tensor of unknown rank and a tensor of known rank is a tensor of unknown rank.
   // Hence, if the source_type had unknown rank, we clear the shape of the target_type.
   // Otherwise, UnionShapeInfoForTensor handles the rest.
   if (source_type.has_shape()) {
-    UnionShapeInfoForTensor(source_type.shape(), target_type);
+    return UnionShapeInfoForTensor(source_type.shape(), target_type);
   } else {
     target_type.clear_shape();
+    return true;
   }
 }
 
-static void UnionShapeInfo(const TypeProto_SparseTensor& source_type, TypeProto_SparseTensor& target_type) {
+static bool UnionShapeInfo(const TypeProto_SparseTensor& source_type, TypeProto_SparseTensor& target_type) {
   // The union of a tensor of unknown rank and a tensor of known rank is a tensor of unknown rank.
   // Hence, if the source_type had unknown rank, we clear the shape of the target_type.
   // Otherwise, UnionShapeInfoForTensor handles the rest.
   if (source_type.has_shape()) {
-    UnionShapeInfoForTensor(source_type.shape(), target_type);
+    return UnionShapeInfoForTensor(source_type.shape(), target_type);
   } else {
     target_type.clear_shape();
+    return true;
   }
 }
 
-void UnionShapeInfo(const TensorShapeProto& source_shape, TypeProto_SparseTensor& target_type) {
-  UnionShapeInfoForTensor(source_shape, target_type);
+bool UnionShapeInfo(const TensorShapeProto& source_shape, TypeProto_SparseTensor& target_type) {
+  return UnionShapeInfoForTensor(source_shape, target_type);
 }
 
-void UnionTypeInfo(const TypeProto& source_type, TypeProto& target_type) {
+bool UnionTypeInfo(const TypeProto& source_type, TypeProto& target_type) {
   if (source_type.value_case() != target_type.value_case()) {
     fail_type_inference(
         "Mismatched type:", " inferred=", source_type.value_case(), " declared=", target_type.value_case());
@@ -280,7 +286,7 @@ void UnionTypeInfo(const TypeProto& source_type, TypeProto& target_type) {
           Utils::DataTypeUtils::ToDataTypeString(target_elem_type));
     }
 
-    UnionShapeInfo(source_type.tensor_type(), *target_type.mutable_tensor_type());
+    return UnionShapeInfo(source_type.tensor_type(), *target_type.mutable_tensor_type());
   } else if (target_case == TypeProto::ValueCase::kSparseTensorType) {
     auto source_elem_type = source_type.sparse_tensor_type().elem_type();
     auto target_elem_type = target_type.sparse_tensor_type().elem_type();
@@ -292,7 +298,7 @@ void UnionTypeInfo(const TypeProto& source_type, TypeProto& target_type) {
           " declared=",
           Utils::DataTypeUtils::ToDataTypeString(target_elem_type));
     }
-    UnionShapeInfo(source_type.sparse_tensor_type(), *target_type.mutable_sparse_tensor_type());
+    return UnionShapeInfo(source_type.sparse_tensor_type(), *target_type.mutable_sparse_tensor_type());
   } else if (target_case == TypeProto::ValueCase::kSequenceType) {
     if (!source_type.sequence_type().has_elem_type()) {
       fail_type_inference("source sequence type missing element type.");
@@ -300,7 +306,8 @@ void UnionTypeInfo(const TypeProto& source_type, TypeProto& target_type) {
     if (!target_type.sequence_type().has_elem_type()) {
       fail_type_inference("target sequence type missing element type.");
     }
-    UnionTypeInfo(source_type.sequence_type().elem_type(), *target_type.mutable_sequence_type()->mutable_elem_type());
+    return UnionTypeInfo(
+        source_type.sequence_type().elem_type(), *target_type.mutable_sequence_type()->mutable_elem_type());
   } else if (target_case == TypeProto::ValueCase::kOptionalType) {
     if (!source_type.optional_type().has_elem_type()) {
       fail_type_inference("source optional type missing element type.");
@@ -308,7 +315,8 @@ void UnionTypeInfo(const TypeProto& source_type, TypeProto& target_type) {
     if (!target_type.optional_type().has_elem_type()) {
       fail_type_inference("target optional type missing element type.");
     }
-    UnionTypeInfo(source_type.optional_type().elem_type(), *target_type.mutable_optional_type()->mutable_elem_type());
+    return UnionTypeInfo(
+        source_type.optional_type().elem_type(), *target_type.mutable_optional_type()->mutable_elem_type());
   } else if (target_case == TypeProto::ValueCase::kMapType) {
     if (!source_type.map_type().has_key_type()) {
       fail_type_inference("source map type missing key type.");
@@ -333,8 +341,9 @@ void UnionTypeInfo(const TypeProto& source_type, TypeProto& target_type) {
     if (!target_type.map_type().has_value_type()) {
       fail_type_inference("target map type missing value type.");
     }
-    UnionTypeInfo(source_type.map_type().value_type(), *target_type.mutable_map_type()->mutable_value_type());
+    return UnionTypeInfo(source_type.map_type().value_type(), *target_type.mutable_map_type()->mutable_value_type());
   }
+  return false;
 }
 
 // Supports both Tensor and SparseTensor

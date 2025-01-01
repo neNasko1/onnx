@@ -3,6 +3,7 @@
  */
 
 #include "onnx/defs/controlflow/utils.h"
+#include "onnx/defs/printer.h"
 
 #include <string>
 #include <vector>
@@ -93,6 +94,8 @@ void LoopInferenceFunction(InferenceContext& ctx) {
   // 'cond'
   subgraph_input_types.push_back(ctx.getInputType(1));
 
+  std::cout << "WE ARE OUTSIDE " << num_inputs << " " << (&ctx) << std::endl;
+
   // loop state value types get propagated to outputs, but shape may change
   // across iterations so don't propagate it to the outputs and don't pass it
   // into the subgraph inferencing
@@ -104,43 +107,39 @@ void LoopInferenceFunction(InferenceContext& ctx) {
     temporary_type_protos.push_back(*ctx.getInputType(i));
     auto& input_type = temporary_type_protos.back();
 
-    ClearShape(input_type);
     subgraph_input_types.push_back(&input_type);
+    std::cout << "Pushing type " << input_type << std::endl;
   }
+
+  auto num_outputs = ctx.getNumOutputs();
 
   // Run inferencing on the subgraph
   std::vector<const TypeProto*> subgraph_output_types;
 
-  GraphInferencer* graphInferencer = ctx.getGraphAttributeInferencer("body");
-  if (graphInferencer) {
-    std::vector<const TensorProto*> input_data;
-    input_data.push_back(nullptr); // iteration number
-    for (size_t i = 1; i < num_inputs; ++i) {
-      input_data.push_back(ctx.getInputData(i));
-    }
+  // We cannot know the value will persist, so initialize with nullptr
+  std::vector<const TensorProto*> input_data(num_inputs, nullptr);
 
-    subgraph_output_types = graphInferencer->doInferencing(subgraph_input_types, input_data);
+  GraphInferencer* graphInferencer = ctx.getGraphAttributeInferencer("body");
+  // Assume inferencing was skipped
+  if (!graphInferencer) {
+    return;
   }
 
-  // if empty(), assume inferencing was skipped
-  if (!subgraph_output_types.empty()) {
-    auto num_outputs = ctx.getNumOutputs();
+  // While we the inferred types are subtyping, we need to run the inference again
+  bool types_changed = false;
+  do {
+    std::cout << "doing again" << std::endl;
+    types_changed = false;
 
-    // subgraph outputs the condition value first but that is only used
-    // internally and not returned by Loop.
-    if (subgraph_output_types.size() != num_outputs + 1) {
-      fail_type_inference(
-          "Graph attribute inferencing returned type information for ",
-          subgraph_output_types.size(),
-          " outputs. Expected ",
-          num_outputs + 1);
+    subgraph_output_types = graphInferencer->doInferencing(subgraph_input_types, input_data);
+
+    // if empty(), assume inferencing was skipped
+    if (subgraph_output_types.empty()) {
+      return;
     }
 
-    // check loop state values match. we should already have type/shape info
     for (size_t i = 0; i < num_outputs; ++i) {
       auto* subgraph_output_type = subgraph_output_types[i + 1]; // skip 'cond'
-      auto* loop_output_type = ctx.getOutputType(i);
-
       const bool is_loop_state_var = i < num_loop_state_vars;
 
       if (!subgraph_output_type->has_tensor_type() && !subgraph_output_type->has_sequence_type() &&
@@ -160,33 +159,44 @@ void LoopInferenceFunction(InferenceContext& ctx) {
             subgraph_output_type->value_case());
       }
 
-      // if there's an existing type check it matches. otherwise propagate
-      propagateElemTypeWithValidation(subgraph_output_type, loop_output_type);
-
       if (is_loop_state_var) {
-        // shape may change across iterations so ignore.
-      } else {
-        // propagate shape
-        if (subgraph_output_type->tensor_type().has_shape()) {
-          // per iteration output. first dimension will be number of iterations
-          // but we don't know that value yet
-          TypeProto inferred_type(*subgraph_output_type);
-          auto* mutable_inferred_tensor_type = inferred_type.mutable_tensor_type();
-          auto* mutable_inferred_shape = mutable_inferred_tensor_type->mutable_shape();
-
-          mutable_inferred_shape->clear_dim();
-
-          // add empty dimension for number of iterations
-          mutable_inferred_shape->add_dim();
-
-          // add dimensions from subgraph output shape
-          for (const auto& dim : subgraph_output_type->tensor_type().shape().dim()) {
-            (*mutable_inferred_shape->add_dim()) = dim;
-          }
-
-          mergeInShapeInfo(*mutable_inferred_tensor_type, *loop_output_type->mutable_tensor_type());
-        }
+        std::cout << "we are changing " << i << " " << *subgraph_output_type << " " << temporary_type_protos[i] << std::endl;
+        types_changed |= UnionTypeInfo(*subgraph_output_type, temporary_type_protos[i]);
+        std::cout << "after" << temporary_type_protos[i] << std::endl;
       }
+    }
+  } while (types_changed);
+
+  // check loop state values match. we should already have type/shape info
+  for (size_t i = 0; i < num_outputs; ++i) {
+    auto* subgraph_output_type = subgraph_output_types[i + 1]; // skip 'cond'
+    auto* loop_output_type = ctx.getOutputType(i);
+    const bool is_loop_state_var = i < num_loop_state_vars;
+
+    // if there's an existing type check it matches. otherwise propagate
+    propagateElemTypeWithValidation(subgraph_output_type, loop_output_type);
+
+    // propagate shape
+    if (subgraph_output_type->tensor_type().has_shape()) {
+      // per iteration output. first dimension will be number of iterations
+      // but we don't know that value yet
+      TypeProto inferred_type(*subgraph_output_type);
+      auto* mutable_inferred_tensor_type = inferred_type.mutable_tensor_type();
+      auto* mutable_inferred_shape = mutable_inferred_tensor_type->mutable_shape();
+
+      mutable_inferred_shape->clear_dim();
+
+      if (!is_loop_state_var) {
+        // add empty dimension for number of iterations
+        mutable_inferred_shape->add_dim();
+      }
+
+      // add dimensions from subgraph output shape
+      for (const auto& dim : subgraph_output_type->tensor_type().shape().dim()) {
+        (*mutable_inferred_shape->add_dim()) = dim;
+      }
+
+      mergeInShapeInfo(*mutable_inferred_tensor_type, *loop_output_type->mutable_tensor_type());
     }
   }
 }

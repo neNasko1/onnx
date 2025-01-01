@@ -4684,7 +4684,7 @@ class TestShapeInference(TestShapeInferenceHelper):
         input_value_infos = [
             make_tensor_value_info("iter_num_in", TensorProto.INT64, (1,)),
             make_tensor_value_info("cond_in", TensorProto.UNDEFINED, None),
-            make_tensor_value_info("loop_state_in", TensorProto.UNDEFINED, ()),
+            make_tensor_value_info("loop_state_in", TensorProto.UNDEFINED, None),
         ]
         output_value_infos = [
             make_tensor_value_info("cond_out", TensorProto.UNDEFINED, None),
@@ -4724,9 +4724,7 @@ class TestShapeInference(TestShapeInferenceHelper):
         self._assert_inferred(
             graph,
             [
-                make_tensor_value_info(
-                    "loop_state_final", TensorProto.FLOAT, None
-                ),  # shape may change between iterations
+                make_tensor_value_info("loop_state_final", TensorProto.FLOAT, (2,)),
                 make_tensor_value_info("loop_output", TensorProto.FLOAT, (None, 3)),
             ],
         )  # type: ignore
@@ -4771,6 +4769,170 @@ class TestShapeInference(TestShapeInferenceHelper):
         self._assert_inferred(
             graph, [make_tensor_value_info("loop_output", TensorProto.FLOAT, (None, 3))]
         )  # type: ignore
+
+    def test_loop_concat_propagates(self) -> None:
+        input_value_infos = [
+            make_tensor_value_info("iter_num_in", TensorProto.INT64, (1,)),
+            make_tensor_value_info("cond_in", TensorProto.BOOL, (1,)),
+            make_tensor_value_info("a_in", TensorProto.FLOAT, (None,)),
+            make_tensor_value_info("b_in", TensorProto.FLOAT, (None,)),
+            make_tensor_value_info("c_in", TensorProto.FLOAT, (None,)),
+            make_tensor_value_info("d_in", TensorProto.FLOAT, (None,)),
+            make_tensor_value_info("e_in", TensorProto.FLOAT, (None,)),
+        ]
+        output_value_infos = [
+            make_tensor_value_info("cond_out", TensorProto.UNDEFINED, (1,)),
+            make_tensor_value_info("a_out", TensorProto.FLOAT, (None,)),
+            make_tensor_value_info("b_out", TensorProto.FLOAT, (None,)),
+            make_tensor_value_info("c_out", TensorProto.FLOAT, (None,)),
+            make_tensor_value_info("d_out", TensorProto.FLOAT, (None,)),
+            make_tensor_value_info("e_out", TensorProto.FLOAT, (None,)),
+            make_tensor_value_info("scan_a_out", TensorProto.FLOAT, (None,)),
+            make_tensor_value_info("scan_b_out", TensorProto.FLOAT, (None,)),
+        ]
+
+        subgraph = helper.make_graph(
+            [
+                make_node("Identity", ["cond_in"], ["cond_out"]),
+                make_node("Concat", ["a_in", "a_in"], ["a_out"], axis=0),
+                make_node("Identity", ["a_in"], ["b_out"]),
+                make_node("Identity", ["b_in"], ["c_out"]),
+                make_node("Identity", ["d_in"], ["d_out"]),
+                make_node("Add", ["d_out", "d_in"], ["e_out"]),
+                make_node("Identity", ["a_out"], ["scan_a_out"]),
+                make_node("Identity", ["d_out"], ["scan_b_out"]),
+            ],
+            "test_loop_concat_propagates",
+            input_value_infos,
+            output_value_infos,
+        )
+
+        graph = self._make_graph(
+            [
+                ("trip_count", TensorProto.INT64, (1,)),
+                ("cond", TensorProto.BOOL, (1,)),
+                ("initial_a", TensorProto.FLOAT, (2,)),
+                ("initial_b", TensorProto.FLOAT, (2,)),
+                ("initial_c", TensorProto.FLOAT, (2,)),
+                ("initial_d", TensorProto.FLOAT, (2,)),
+                ("initial_e", TensorProto.FLOAT, None),
+            ],
+            [
+                make_node(
+                    "Loop",
+                    [
+                        "trip_count",
+                        "cond",
+                        "initial_a",
+                        "initial_b",
+                        "initial_c",
+                        "initial_d",
+                        "initial_e",
+                    ],
+                    [
+                        "final_a",
+                        "final_b",
+                        "final_c",
+                        "final_d",
+                        "final_e",
+                        "final_scan_a",
+                        "final_scan_b",
+                    ],
+                    body=subgraph,
+                )
+            ],
+            [],
+        )
+
+        self._assert_inferred(
+            graph,
+            [
+                make_tensor_value_info("final_a", TensorProto.FLOAT, (None,)),
+                make_tensor_value_info("final_b", TensorProto.FLOAT, (None,)),
+                make_tensor_value_info("final_c", TensorProto.FLOAT, (None,)),
+                make_tensor_value_info("final_d", TensorProto.FLOAT, (2,)),
+                make_tensor_value_info("final_e", TensorProto.FLOAT, (2,)),
+                make_tensor_value_info("final_scan_a", TensorProto.FLOAT, (None, None)),
+                make_tensor_value_info("final_scan_b", TensorProto.FLOAT, (None, 2)),
+            ],
+        )
+        assert False
+
+    def test_loop_nested(self) -> None:
+        inner_input_value_infos = [
+            make_tensor_value_info("inner_iter_num_in", TensorProto.INT64, (1,)),
+            make_tensor_value_info("inner_cond_in", TensorProto.BOOL, (1,)),
+            make_tensor_value_info("c_in", TensorProto.FLOAT, None),
+        ]
+        inner_output_value_infos = [
+            make_tensor_value_info("inner_cond_out", TensorProto.BOOL, None),
+            make_tensor_value_info("c_out", TensorProto.FLOAT, None),
+        ]
+
+        inner_subgraph = helper.make_graph(
+            [
+                make_node("Identity", ["inner_cond_in"], ["inner_cond_out"]),
+                make_node("Concat", ["c_in", "c_in"], ["c_out"], axis=0)
+            ],
+            "inner_body",
+            inner_input_value_infos,
+            inner_output_value_infos,
+        )
+
+        outer_input_value_infos = [
+            make_tensor_value_info("outer_iter_num_in", TensorProto.INT64, (1,)),
+            make_tensor_value_info("outer_cond_in", TensorProto.BOOL, (1,)),
+            make_tensor_value_info("a_in", TensorProto.FLOAT, None),
+            make_tensor_value_info("b_in", TensorProto.FLOAT, None),
+        ]
+        outer_output_value_infos = [
+            make_tensor_value_info("outer_cond_out", TensorProto.UNDEFINED, None),
+            make_tensor_value_info("a_out", TensorProto.FLOAT, None),
+            make_tensor_value_info("b_out", TensorProto.FLOAT, None),
+        ]
+
+        outer_subgraph = helper.make_graph(
+            [
+                make_node("Identity", ["outer_cond_in"], ["outer_cond_out"]),
+                make_node(
+                    "Loop",
+                    ["trip_count_inner", "cond", "c_in"],
+                    ["c_out"],
+                    body=inner_subgraph,
+                ),
+                make_node("Concat", ["a_in", "c_out"], ["a_out"], axis=0),
+                make_node("Add", ["a_out", "b_in"], ["b_out"]),
+            ],
+            "outer_body",
+            outer_input_value_infos,
+            outer_output_value_infos,
+        )
+
+        graph = self._make_graph(
+            [
+                ("trip_count_inner", TensorProto.INT64, (1,)),
+                ("cond", TensorProto.BOOL, (1,)),
+                ("initial_a", TensorProto.FLOAT, None),
+                ("initial_b", TensorProto.FLOAT, None),
+            ],
+            [
+                make_node(
+                    "Loop",
+                    ["trip_count_outer", "cond", "initial_a", "initial_b"],
+                    ["final_a", "final_b"],
+                    body=outer_subgraph,
+                )
+            ],
+            [],
+        )
+
+        self._assert_inferred(
+            graph,
+            [
+                make_tensor_value_info("final_a", TensorProto.FLOAT, None),
+                make_tensor_value_info("final_b", TensorProto.FLOAT, None),
+            ],
+        )
 
     def test_constantofshape_with_input_shape(self) -> None:
         graph = self._make_graph(
